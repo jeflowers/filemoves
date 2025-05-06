@@ -1,0 +1,93 @@
+version: '3'
+
+networks:
+  landing_zone_network:
+    driver: bridge
+  admin_network:
+    driver: bridge
+    internal: false  # Allows external connectivity
+
+services:
+  ubuntu-container:
+    image: ubuntu:22.04
+    container_name: ubuntu-ssh
+    restart: always
+    volumes:
+      - /opt/LANDINGZONE:/LANDINGZONE:rw
+    ports:
+      - "2201:22"
+    networks:
+      - landing_zone_network
+    command: >
+      bash -c "
+        apt-get update && 
+        apt-get install -y openssh-server && 
+        mkdir -p /run/sshd && 
+        echo 'PermitRootLogin no' >> /etc/ssh/sshd_config &&
+        useradd -m -s /bin/bash ubuntu-user &&
+        mkdir -p /home/ubuntu-user/.ssh &&
+        echo 'CONTAINER_USER_SSH_KEY' > /home/ubuntu-user/.ssh/authorized_keys &&
+        chmod 700 /home/ubuntu-user/.ssh &&
+        chmod 600 /home/ubuntu-user/.ssh/authorized_keys &&
+        chown -R ubuntu-user:ubuntu-user /home/ubuntu-user/.ssh &&
+        /usr/sbin/sshd -D
+      "
+
+  windows-container:
+    image: mcr.microsoft.com/windows/servercore:ltsc2022
+    container_name: windows-ssh
+    restart: always
+    volumes:
+      - /opt/LANDINGZONE:/LANDINGZONE:rw
+    ports:
+      - "2202:22"
+    networks:
+      - landing_zone_network
+    command: powershell -Command "
+      # Install OpenSSH Server
+      Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0;
+      # Set SSH service to start automatically
+      Set-Service sshd -StartupType Automatic;
+      # Start SSH service
+      Start-Service sshd;
+      # Create user for SSH access
+      New-LocalUser -Name 'windows-user' -NoPassword;
+      # Create .ssh directory and authorized_keys
+      New-Item -Path 'C:\\Users\\windows-user\\.ssh' -ItemType Directory -Force;
+      Set-Content -Path 'C:\\Users\\windows-user\\.ssh\\authorized_keys' -Value 'CONTAINER_USER_SSH_KEY';
+      # Set appropriate permissions
+      icacls 'C:\\Users\\windows-user\\.ssh' /inheritance:r /grant:r 'windows-user:(OI)(CI)F';
+      icacls 'C:\\Users\\windows-user\\.ssh\\authorized_keys' /inheritance:r /grant:r 'windows-user:F';
+      # Create landing zone directory
+      New-Item -Path 'C:\\LANDINGZONE\\windows' -ItemType Directory -Force;
+      # Keep container running
+      while($true) { Start-Sleep -Seconds 3600 }
+    "
+
+  admin-container:
+    image: ubuntu:22.04
+    container_name: admin-sftp
+    restart: always
+    volumes:
+      - /opt/LANDINGZONE:/LANDINGZONE:rw
+    ports:
+      - "2222:22"  # Admin SFTP port
+    networks:
+      - admin_network
+      - landing_zone_network
+    command: >
+      bash -c "
+        apt-get update && 
+        apt-get install -y openssh-server && 
+        mkdir -p /run/sshd && 
+        echo 'PermitRootLogin no' >> /etc/ssh/sshd_config &&
+        useradd -m -s /bin/bash admin-user &&
+        mkdir -p /home/admin-user/.ssh &&
+        echo 'ADMIN_SSH_KEY' > /home/admin-user/.ssh/authorized_keys &&
+        chmod 700 /home/admin-user/.ssh &&
+        chmod 600 /home/admin-user/.ssh/authorized_keys &&
+        chown -R admin-user:admin-user /home/admin-user/.ssh &&
+        chown -R admin-user:admin-user /LANDINGZONE &&
+        chmod -R 770 /LANDINGZONE &&
+        /usr/sbin/sshd -D
+      "
